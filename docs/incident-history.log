@@ -1,0 +1,3 @@
+[2026-05-07] alert-dedup-engine.ts — Negative dedup interval (-300ms) from reversed timestamps — Added endTime >= startTime guard, throws RangeError on inversion — FIXED
+[2026-05-07] severity-parser.ts — TypeMismatch: severity field received as string instead of number — Added parseSeverity() with Number() coercion, isFinite check, and [0,5] range validation — FIXED
+[2026-05-07] response-parser.ts — SyntaxError: HTML error page parsed as JSON (token "<" at pos 42) — Added Content-Type validation in parseJsonResponse() before calling response.json() — FIXED
