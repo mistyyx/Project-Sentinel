@@ -22,14 +22,16 @@ const ERROR_LOG   = path.resolve(__dirname, '../services/error.log');
 
 const INTERVAL_MS = 5000; // How often the monkey strikes (milliseconds)
 
-// The three fake error types the monkey can inject
-const ERROR_TYPES = ['SyntaxError', 'TypeMismatch', 'LogicError'];
+// The five fake error types the monkey can inject
+const ERROR_TYPES = ['SyntaxError', 'TypeMismatch', 'LogicError', 'DependencyError', 'ConfigError'];
 
 // Fake error messages paired to each error type for realistic log output
 const ERROR_MESSAGES = {
-  SyntaxError:   'Unexpected token "<" at position 42 in response payload.',
-  TypeMismatch:  'Expected type "number" but received "string" for field "severity".',
-  LogicError:    'Alert deduplication window produced a negative interval (-300ms).',
+  SyntaxError:      'Unexpected token "<" at position 42 in response payload.',
+  TypeMismatch:     'Expected type "number" but received "string" for field "severity".',
+  LogicError:       'Alert deduplication window produced a negative interval (-300ms).',
+  DependencyError:  'Package "axios" not found — entry removed from package.json by chaos injection.',
+  ConfigError:      'SyntaxError in config.json at position 1: unexpected token "}" — file corrupted by chaos injection.',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
