@@ -10,13 +10,48 @@
  *  - parseSeverity:        NaN, Infinity, and whitespace-padded numeric string " 3 "
  *  - parseJsonResponse:    Response with no Content-Type header at all (absent, not empty)
  *  - calculateDedupWindow: floating-point timestamps
+ *
+ * Additional suites guard against chaos-monkey synthetic injection being mistaken
+ * for a real regression:
+ *  - Source integrity:     defensive guard strings must be present in each service file
+ *  - Chaos-monkey canary:  DependencyError / ConfigError are synthetic-only error types
+ *  - Integration payloads: service functions handle chaos-monkey-emulated payload shapes
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { parseSeverity } from "../severity-parser";
 import { parseJsonResponse } from "../response-parser";
 import { calculateDedupWindow } from "../alert-dedup-engine";
+
+// ---------------------------------------------------------------------------
+// Path constants — resolved relative to the compiled output location so that
+// fs.readFileSync finds the actual source artefacts on disk regardless of cwd.
+// ---------------------------------------------------------------------------
+
+const SERVICES_ROOT = path.resolve(__dirname, "..", "..");
+const ALERT_DEDUP_SOURCE_PATH = path.join(SERVICES_ROOT, "alert-dedup-engine.ts");
+const SEVERITY_PARSER_SOURCE_PATH = path.join(SERVICES_ROOT, "severity-parser.ts");
+const RESPONSE_PARSER_SOURCE_PATH = path.join(SERVICES_ROOT, "response-parser.ts");
+const CHAOS_MONKEY_PATH = path.resolve(SERVICES_ROOT, "..", "scripts", "chaos-monkey.js");
+
+// Guard strings that must be present in source files
+const ALERT_DEDUP_GUARD_STRING = "endTime < startTime";
+const SEVERITY_PARSER_GUARD_STRING = "Number.isFinite";
+const RESPONSE_PARSER_GUARD_STRING = "application/json";
+
+// Chaos-monkey synthetic-only error type identifiers
+const SYNTHETIC_ERROR_TYPE_DEPENDENCY = "DependencyError";
+const SYNTHETIC_ERROR_TYPE_CONFIG = "ConfigError";
+
+// Reversed timestamp values that reproduce the LogicError chaos-monkey pattern
+const LOGIC_ERROR_REVERSED_START_MS = 1000;
+const LOGIC_ERROR_REVERSED_END_MS = 700;
+
+// Content-Type value used to emulate the SyntaxError chaos-monkey pattern
+const SYNTHETIC_HTML_CONTENT_TYPE = "text/html";
 
 // ---------------------------------------------------------------------------
 // parseSeverity — edge cases
@@ -176,5 +211,219 @@ describe("calculateDedupWindow regression — edge cases from production inciden
     const result = calculateDedupWindow(startTime, endTime);
     assert.equal(result.startTime, startTime);
     assert.equal(result.endTime, endTime);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Source integrity — guard strings must be present in each service source file
+//
+// These tests detect if a future chaos injection or accidental edit removes the
+// defensive guards that Alpha introduced.  A failure here means the production
+// defence has been eroded, NOT merely that a test is wrong.
+// ---------------------------------------------------------------------------
+
+describe("source integrity — defensive guards must be present in service source files", () => {
+  it("should contain the endTime < startTime guard in alert-dedup-engine.ts", () => {
+    const sourceContent: string = fs.readFileSync(ALERT_DEDUP_SOURCE_PATH, "utf8");
+    const hasGuard: boolean = sourceContent.includes(ALERT_DEDUP_GUARD_STRING);
+    assert.ok(
+      hasGuard,
+      `Expected alert-dedup-engine.ts to contain "${ALERT_DEDUP_GUARD_STRING}"`
+    );
+  });
+
+  it("should contain the Number.isFinite guard in severity-parser.ts", () => {
+    const sourceContent: string = fs.readFileSync(SEVERITY_PARSER_SOURCE_PATH, "utf8");
+    const hasGuard: boolean = sourceContent.includes(SEVERITY_PARSER_GUARD_STRING);
+    assert.ok(
+      hasGuard,
+      `Expected severity-parser.ts to contain "${SEVERITY_PARSER_GUARD_STRING}"`
+    );
+  });
+
+  it("should contain the application/json Content-Type check in response-parser.ts", () => {
+    const sourceContent: string = fs.readFileSync(RESPONSE_PARSER_SOURCE_PATH, "utf8");
+    const hasGuard: boolean = sourceContent.includes(RESPONSE_PARSER_GUARD_STRING);
+    assert.ok(
+      hasGuard,
+      `Expected response-parser.ts to contain "${RESPONSE_PARSER_GUARD_STRING}"`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chaos-monkey canary — DependencyError and ConfigError are synthetic-only
+//
+// These error type identifiers exist only inside chaos-monkey.js.  If either
+// string ever appears at a throw site in a production service file it would
+// mean real code has started emitting synthetic error labels — a clear sign
+// of misattribution or unintentional copy-paste from the chaos script.
+// ---------------------------------------------------------------------------
+
+describe("chaos-monkey canary — DependencyError and ConfigError must not appear in production service files", () => {
+  it("should confirm DependencyError is defined in chaos-monkey.js", () => {
+    const chaosSource: string = fs.readFileSync(CHAOS_MONKEY_PATH, "utf8");
+    const hasDependencyError: boolean = chaosSource.includes(SYNTHETIC_ERROR_TYPE_DEPENDENCY);
+    assert.ok(
+      hasDependencyError,
+      `Expected chaos-monkey.js to contain "${SYNTHETIC_ERROR_TYPE_DEPENDENCY}"`
+    );
+  });
+
+  it("should confirm ConfigError is defined in chaos-monkey.js", () => {
+    const chaosSource: string = fs.readFileSync(CHAOS_MONKEY_PATH, "utf8");
+    const hasConfigError: boolean = chaosSource.includes(SYNTHETIC_ERROR_TYPE_CONFIG);
+    assert.ok(
+      hasConfigError,
+      `Expected chaos-monkey.js to contain "${SYNTHETIC_ERROR_TYPE_CONFIG}"`
+    );
+  });
+
+  it("should confirm DependencyError does not appear as a throw site in alert-dedup-engine.ts", () => {
+    const sourceContent: string = fs.readFileSync(ALERT_DEDUP_SOURCE_PATH, "utf8");
+    const hasSyntheticType: boolean = sourceContent.includes(SYNTHETIC_ERROR_TYPE_DEPENDENCY);
+    assert.equal(
+      hasSyntheticType,
+      false,
+      `alert-dedup-engine.ts must not contain the synthetic type "${SYNTHETIC_ERROR_TYPE_DEPENDENCY}"`
+    );
+  });
+
+  it("should confirm ConfigError does not appear as a throw site in alert-dedup-engine.ts", () => {
+    const sourceContent: string = fs.readFileSync(ALERT_DEDUP_SOURCE_PATH, "utf8");
+    const hasSyntheticType: boolean = sourceContent.includes(SYNTHETIC_ERROR_TYPE_CONFIG);
+    assert.equal(
+      hasSyntheticType,
+      false,
+      `alert-dedup-engine.ts must not contain the synthetic type "${SYNTHETIC_ERROR_TYPE_CONFIG}"`
+    );
+  });
+
+  it("should confirm DependencyError does not appear as a throw site in severity-parser.ts", () => {
+    const sourceContent: string = fs.readFileSync(SEVERITY_PARSER_SOURCE_PATH, "utf8");
+    const hasSyntheticType: boolean = sourceContent.includes(SYNTHETIC_ERROR_TYPE_DEPENDENCY);
+    assert.equal(
+      hasSyntheticType,
+      false,
+      `severity-parser.ts must not contain the synthetic type "${SYNTHETIC_ERROR_TYPE_DEPENDENCY}"`
+    );
+  });
+
+  it("should confirm ConfigError does not appear as a throw site in severity-parser.ts", () => {
+    const sourceContent: string = fs.readFileSync(SEVERITY_PARSER_SOURCE_PATH, "utf8");
+    const hasSyntheticType: boolean = sourceContent.includes(SYNTHETIC_ERROR_TYPE_CONFIG);
+    assert.equal(
+      hasSyntheticType,
+      false,
+      `severity-parser.ts must not contain the synthetic type "${SYNTHETIC_ERROR_TYPE_CONFIG}"`
+    );
+  });
+
+  it("should confirm DependencyError does not appear as a throw site in response-parser.ts", () => {
+    const sourceContent: string = fs.readFileSync(RESPONSE_PARSER_SOURCE_PATH, "utf8");
+    const hasSyntheticType: boolean = sourceContent.includes(SYNTHETIC_ERROR_TYPE_DEPENDENCY);
+    assert.equal(
+      hasSyntheticType,
+      false,
+      `response-parser.ts must not contain the synthetic type "${SYNTHETIC_ERROR_TYPE_DEPENDENCY}"`
+    );
+  });
+
+  it("should confirm ConfigError does not appear as a throw site in response-parser.ts", () => {
+    const sourceContent: string = fs.readFileSync(RESPONSE_PARSER_SOURCE_PATH, "utf8");
+    const hasSyntheticType: boolean = sourceContent.includes(SYNTHETIC_ERROR_TYPE_CONFIG);
+    assert.equal(
+      hasSyntheticType,
+      false,
+      `response-parser.ts must not contain the synthetic type "${SYNTHETIC_ERROR_TYPE_CONFIG}"`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration payloads — service functions handle the exact shapes that
+// chaos-monkey synthetic errors emulate
+//
+// Each test reproduces the original failure condition described in the error
+// log and asserts the service throws the correctly typed defensive error.
+// ---------------------------------------------------------------------------
+
+describe("integration payloads — services reject chaos-monkey-emulated malformed inputs", () => {
+  it("should throw TypeError when parseSeverity receives a non-numeric string (TypeMismatch pattern)", () => {
+    // Reproduces: 'Expected type "number" but received "string" for field "severity"'
+    assert.throws(
+      () => parseSeverity("string"),
+      TypeError
+    );
+  });
+
+  it("should throw TypeError and the message should reference the original value for the TypeMismatch pattern", () => {
+    assert.throws(
+      () => parseSeverity("string"),
+      (err: unknown) => {
+        assert.ok(err instanceof TypeError);
+        const typeErr = err as TypeError;
+        assert.ok(typeErr.message.length > 0);
+        return true;
+      }
+    );
+  });
+
+  it("should throw RangeError when calculateDedupWindow receives reversed timestamps (LogicError pattern)", () => {
+    // Reproduces: 'Alert deduplication window produced a negative interval (-300ms)'
+    assert.throws(
+      () => calculateDedupWindow(LOGIC_ERROR_REVERSED_START_MS, LOGIC_ERROR_REVERSED_END_MS),
+      RangeError
+    );
+  });
+
+  it("should throw RangeError whose message references both timestamps for the LogicError pattern", () => {
+    assert.throws(
+      () => calculateDedupWindow(LOGIC_ERROR_REVERSED_START_MS, LOGIC_ERROR_REVERSED_END_MS),
+      (err: unknown) => {
+        assert.ok(err instanceof RangeError);
+        const rangeErr = err as RangeError;
+        assert.ok(
+          rangeErr.message.includes(String(LOGIC_ERROR_REVERSED_START_MS)),
+          `Expected message to include startTime ${LOGIC_ERROR_REVERSED_START_MS}`
+        );
+        assert.ok(
+          rangeErr.message.includes(String(LOGIC_ERROR_REVERSED_END_MS)),
+          `Expected message to include endTime ${LOGIC_ERROR_REVERSED_END_MS}`
+        );
+        return true;
+      }
+    );
+  });
+
+  it("should throw SyntaxError when parseJsonResponse receives a text/html response (SyntaxError pattern)", async () => {
+    // Reproduces: 'Unexpected token "<" at position 42 in response payload'
+    const mockHtmlResponse: Response = new Response(
+      "<html><body>Internal Server Error</body></html>",
+      { headers: { "Content-Type": SYNTHETIC_HTML_CONTENT_TYPE } }
+    );
+    await assert.rejects(
+      () => parseJsonResponse(mockHtmlResponse),
+      SyntaxError
+    );
+  });
+
+  it("should throw SyntaxError whose message references application/json when html response is received", async () => {
+    const mockHtmlResponse: Response = new Response(
+      "<html><body>Unexpected token</body></html>",
+      { headers: { "Content-Type": SYNTHETIC_HTML_CONTENT_TYPE } }
+    );
+    await assert.rejects(
+      () => parseJsonResponse(mockHtmlResponse),
+      (err: unknown) => {
+        assert.ok(err instanceof SyntaxError);
+        const syntaxErr = err as SyntaxError;
+        assert.ok(
+          syntaxErr.message.includes(RESPONSE_PARSER_GUARD_STRING),
+          `Expected SyntaxError message to reference "${RESPONSE_PARSER_GUARD_STRING}"`
+        );
+        return true;
+      }
+    );
   });
 });
